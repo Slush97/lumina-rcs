@@ -17,6 +17,18 @@ export type Conversation = {
 
 export type Status = { paired: boolean; connected: boolean };
 
+export type DetectedBrowser = {
+  id: string;
+  display: string;
+  cookie_count: number;
+  has_sapisid: boolean;
+};
+
+export type ImportedCookies = {
+  browser: string;
+  cookies: Record<string, string>;
+};
+
 export const bridge = {
   status: () => invoke<Status>("bridge_status"),
   pair: () => invoke<{ qr_url: string }>("bridge_pair"),
@@ -27,6 +39,9 @@ export const bridge = {
   startGaiaLogin: () => invoke<void>("start_gaia_login"),
   pairWithCookies: (cookies: Record<string, string>) =>
     invoke<{ started: boolean }>("pair_with_cookies", { cookies }),
+  detectBrowsers: () => invoke<DetectedBrowser[]>("detect_browsers"),
+  importBrowserCookies: (browser: string) =>
+    invoke<ImportedCookies>("import_browser_cookies", { browser }),
 };
 
 export type LuminaEvent =

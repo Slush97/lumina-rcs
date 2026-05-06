@@ -1,11 +1,13 @@
 <script setup lang="ts">
 import { onMounted, onBeforeUnmount, ref, computed } from "vue";
-import { bridge, on } from "../bridge";
+import { bridge, on, type DetectedBrowser } from "../bridge";
 
 const emit = defineEmits<{ (e: "paired"): void }>();
 
 type Phase =
   | "choose"
+  | "detecting"
+  | "picking"
   | "paste"
   | "submitting"
   | "awaiting_emoji"
@@ -17,6 +19,8 @@ const emoji = ref<string>("");
 const errorMsg = ref<string>("");
 const phoneId = ref<string>("");
 const cookieText = ref<string>("");
+const detected = ref<DetectedBrowser[]>([]);
+const importingFrom = ref<string>("");
 
 const REQUIRED_COOKIES = ["SAPISID"];
 
@@ -89,6 +93,32 @@ async function submitCookies() {
   }
 }
 
+async function startBrowserImport() {
+  phase.value = "detecting";
+  errorMsg.value = "";
+  try {
+    detected.value = await bridge.detectBrowsers();
+  } catch (e) {
+    errorMsg.value = String(e);
+    phase.value = "error";
+    return;
+  }
+  phase.value = "picking";
+}
+
+async function importFrom(browser: DetectedBrowser) {
+  importingFrom.value = browser.display;
+  phase.value = "submitting";
+  errorMsg.value = "";
+  try {
+    const result = await bridge.importBrowserCookies(browser.id);
+    await bridge.pairWithCookies(result.cookies);
+  } catch (e) {
+    errorMsg.value = String(e);
+    phase.value = "error";
+  }
+}
+
 const unlisten: (() => void)[] = [];
 
 onMounted(async () => {
@@ -123,21 +153,32 @@ onBeforeUnmount(() => unlisten.forEach((fn) => fn()));
         Pair your phone
       </h1>
 
-      <!-- Choose: only path that actually works for now is paste. -->
+      <!-- Choose: import from local browser, or paste manually. -->
       <div v-if="phase === 'choose'" class="space-y-6 text-center">
         <p class="text-sm text-ink-500 dark:text-ink-300">
           Google blocks sign-in from this app's webview, so we pair using
-          cookies copied from a browser where you're already signed in.
+          your existing browser session.
         </p>
-        <button
-          class="px-6 py-3 rounded-lg bg-accent-600 hover:bg-accent-500
-                 text-surface-0 font-medium transition-colors"
-          @click="phase = 'paste'"
-        >
-          Paste cookies from browser
-        </button>
+        <div class="flex flex-col gap-3 items-center">
+          <button
+            class="px-6 py-3 rounded-lg bg-accent-600 hover:bg-accent-500
+                   text-surface-0 font-medium transition-colors w-64"
+            @click="startBrowserImport"
+          >
+            Import from a browser
+          </button>
+          <button
+            class="px-6 py-2 rounded-lg border border-ink-300/40 dark:border-ink-300/30
+                   text-ink-700 dark:text-ink-100
+                   hover:bg-accent-100/40 dark:hover:bg-accent-900/40
+                   transition-colors w-64 text-sm"
+            @click="phase = 'paste'"
+          >
+            Paste cookies manually
+          </button>
+        </div>
         <p class="text-xs text-ink-500 dark:text-ink-300">
-          Need help finding them?
+          Need help?
           <a
             href="https://github.com/Slush97/lumina-rcs/blob/master/docs/COOKIE_PAIRING.md"
             target="_blank"
@@ -146,6 +187,88 @@ onBeforeUnmount(() => unlisten.forEach((fn) => fn()));
             See the cookie-pairing guide
           </a>
         </p>
+      </div>
+
+      <!-- Detecting: probing browsers for google.com cookies. -->
+      <div
+        v-else-if="phase === 'detecting'"
+        class="text-ink-500 dark:text-ink-300 text-center"
+      >
+        Looking for browsers you're signed into Google with…
+      </div>
+
+      <!-- Picking: list of detected browsers. -->
+      <div v-else-if="phase === 'picking'" class="space-y-4">
+        <div v-if="detected.length === 0" class="text-center space-y-4">
+          <p class="text-sm text-ink-700 dark:text-ink-100">
+            No browsers with Google cookies were found.
+          </p>
+          <p class="text-xs text-ink-500 dark:text-ink-300">
+            Sign into
+            <code>messages.google.com/web</code> in Chrome, Brave, Firefox,
+            or another supported browser, then try again. Or paste cookies
+            manually below.
+          </p>
+          <div class="flex justify-center gap-2">
+            <button
+              class="px-4 py-1 rounded-lg border border-ink-300/40 dark:border-ink-300/30
+                     text-ink-700 dark:text-ink-100
+                     hover:bg-accent-100/40 dark:hover:bg-accent-900/40 transition-colors"
+              @click="phase = 'choose'"
+            >
+              Back
+            </button>
+            <button
+              class="px-4 py-1 rounded-lg bg-accent-600 hover:bg-accent-500
+                     text-surface-0 font-medium transition-colors"
+              @click="phase = 'paste'"
+            >
+              Paste manually
+            </button>
+          </div>
+        </div>
+        <div v-else class="space-y-3">
+          <p class="text-sm text-ink-500 dark:text-ink-300 text-center">
+            Pick the browser you're signed into Google with:
+          </p>
+          <ul class="space-y-2">
+            <li v-for="b in detected" :key="b.id">
+              <button
+                :disabled="!b.has_sapisid"
+                class="w-full flex items-center justify-between px-4 py-3 rounded-lg
+                       paper-card hover:bg-accent-100/40 dark:hover:bg-accent-900/40
+                       transition-colors text-left
+                       disabled:opacity-40 disabled:cursor-not-allowed
+                       disabled:hover:bg-transparent"
+                @click="importFrom(b)"
+              >
+                <span class="font-medium text-ink-700 dark:text-ink-100">
+                  {{ b.display }}
+                </span>
+                <span class="text-xs text-ink-500 dark:text-ink-300">
+                  <span v-if="b.has_sapisid">{{ b.cookie_count }} cookies</span>
+                  <span v-else>not signed in</span>
+                </span>
+              </button>
+            </li>
+          </ul>
+          <div class="flex justify-end gap-2 text-xs">
+            <button
+              class="px-3 py-1 rounded-lg text-ink-500 dark:text-ink-300
+                     hover:text-ink-700 dark:hover:text-ink-100 transition-colors"
+              @click="phase = 'choose'"
+            >
+              Back
+            </button>
+            <button
+              class="px-3 py-1 rounded-lg text-ink-500 dark:text-ink-300
+                     hover:text-ink-700 dark:hover:text-ink-100 transition-colors"
+              @click="phase = 'paste'"
+            >
+              Paste manually instead
+            </button>
+          </div>
+        </div>
       </div>
 
       <!-- Paste: textarea + parse feedback. -->
@@ -207,7 +330,10 @@ onBeforeUnmount(() => unlisten.forEach((fn) => fn()));
         v-else-if="phase === 'submitting'"
         class="text-ink-500 dark:text-ink-300 text-center"
       >
-        Sending cookies to Google…
+        <span v-if="importingFrom">
+          Importing cookies from {{ importingFrom }}…
+        </span>
+        <span v-else>Sending cookies to Google…</span>
       </div>
 
       <!-- Got emoji: prompt user to tap matching one on phone. -->

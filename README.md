@@ -50,18 +50,24 @@ Override the bridge binary path with `LUMINA_BRIDGE_BIN=/path/to/binary`.
 
 Lumina uses Google's account-based (GAIA) pairing because the QR flow is
 being phased out of Google Messages. Because Google blocks login from
-WebKitGTK, you copy the session cookies in from a real browser:
+WebKitGTK, Lumina needs your existing browser session.
 
-1. Click **Paste cookies from browser** in Lumina.
-2. Sign into `messages.google.com/web` in Chrome/Firefox/Brave/etc.
-3. Open DevTools → Storage → Cookies → `https://google.com`, copy at
-   least the `SAPISID` cookie (and ideally `HSID`, `SSID`, `SID`,
-   `APISID` too).
-4. Paste into Lumina, click **Pair**.
-5. Lumina shows one emoji; your phone shows three — tap the matching
+**One-click path (recommended):**
+
+1. Sign into `messages.google.com/web` in Chrome / Brave / Firefox /
+   Edge / etc.
+2. In Lumina, click **Import from a browser**.
+3. Pick the browser from the list Lumina detects.
+4. Lumina shows one emoji; your phone shows three — tap the matching
    one.
 
-Full walkthrough in [`docs/COOKIE_PAIRING.md`](docs/COOKIE_PAIRING.md).
+Lumina reads cookies directly from the browser's local cookie store
+(decrypting where necessary via the OS keyring). Supports Chrome, Brave,
+Chromium, Edge, Vivaldi, Opera, Opera GX, Arc, Firefox, LibreWolf, Zen,
+and (on macOS) Safari.
+
+**Manual fallback:** click **Paste cookies manually** in Lumina, then
+follow [`docs/COOKIE_PAIRING.md`](docs/COOKIE_PAIRING.md).
 
 Your phone must have Google Messages set as the default SMS app and stay
 online (WiFi or cellular).
@@ -89,6 +95,6 @@ Methods: `status`, `pair` (legacy QR), `pair_gaia`, `connect`, `unpair`,
 - Phase 3: compose + send.
 - Phase 4: read receipts, typing, reactions.
 - Phase 5: production sidecar bundling via Tauri `externalBin`.
-- Phase 6 (UX polish): read cookies directly from
-  Chrome/Brave/Chromium's `Cookies` SQLite DB so the paste step
-  disappears. See [`docs/COOKIE_PAIRING.md`](docs/COOKIE_PAIRING.md).
+- ~~Phase 6 (UX polish): read cookies directly from Chrome/Brave/Chromium's
+  `Cookies` SQLite DB so the paste step disappears.~~ Done — see
+  **Import from a browser** above.

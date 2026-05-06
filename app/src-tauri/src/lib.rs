@@ -1,4 +1,5 @@
 mod bridge;
+mod cookies;
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -8,6 +9,7 @@ use serde_json::{json, Value};
 use tauri::{AppHandle, Manager, State, WebviewUrl, WebviewWindowBuilder};
 
 use crate::bridge::Bridge;
+use crate::cookies::{DetectedBrowser, ImportedCookies};
 
 struct AppState {
     bridge: Arc<Bridge>,
@@ -52,6 +54,24 @@ async fn pair_with_cookies(
 ) -> Result<Value, String> {
     let params = json!({ "cookies": cookies });
     state.bridge.call("pair_gaia", Some(params)).await
+}
+
+/// Probe local browsers for google.com cookies and return the ones that
+/// have data. Used to populate the "Import from browser" picker.
+#[tauri::command]
+async fn detect_browsers() -> Result<Vec<DetectedBrowser>, String> {
+    tauri::async_runtime::spawn_blocking(cookies::detect)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// Pull google.com cookies from `browser` (e.g. "brave", "chrome").
+/// Caller is expected to forward the result to `pair_with_cookies`.
+#[tauri::command]
+async fn import_browser_cookies(browser: String) -> Result<ImportedCookies, String> {
+    tauri::async_runtime::spawn_blocking(move || cookies::import(&browser))
+        .await
+        .map_err(|e| e.to_string())?
 }
 
 /// Open a webview window pointed at messages.google.com so the user can
@@ -177,6 +197,8 @@ pub fn run() {
             bridge_list_conversations,
             start_gaia_login,
             pair_with_cookies,
+            detect_browsers,
+            import_browser_cookies,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
