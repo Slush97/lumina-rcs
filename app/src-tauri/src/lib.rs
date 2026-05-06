@@ -5,6 +5,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
+use base64::Engine;
 use serde_json::{json, Value};
 use tauri::{AppHandle, Manager, State, WebviewUrl, WebviewWindowBuilder};
 
@@ -42,6 +43,23 @@ async fn bridge_list_conversations(
 ) -> Result<Value, String> {
     let params = count.map(|c| json!({ "count": c }));
     state.bridge.call("list_conversations", params).await
+}
+
+#[tauri::command]
+async fn bridge_fetch_messages(
+    state: State<'_, AppState>,
+    conversation_id: String,
+    count: Option<u32>,
+    cursor: Option<Value>,
+) -> Result<Value, String> {
+    let mut params = json!({ "conversation_id": conversation_id });
+    if let Some(c) = count {
+        params["count"] = json!(c);
+    }
+    if let Some(cur) = cursor {
+        params["cursor"] = cur;
+    }
+    state.bridge.call("fetch_messages", Some(params)).await
 }
 
 /// Forward a user-pasted cookie map straight to the bridge. Used because
@@ -170,6 +188,89 @@ pub fn run() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .register_asynchronous_uri_scheme_protocol("lumina-media", |ctx, request, responder| {
+            // URL form: lumina-media://localhost/<media-id>. Tauri/WebKit
+            // routes both `lumina-media://abc` and `lumina-media://localhost/abc`
+            // here; we accept either by stripping a leading `/`.
+            let path = request.uri().path();
+            let media_id = path.strip_prefix('/').unwrap_or(path).to_string();
+            let app = ctx.app_handle().clone();
+            log::info!(
+                "lumina-media request: uri={} path={} media_id={}",
+                request.uri(),
+                path,
+                media_id
+            );
+
+            tauri::async_runtime::spawn(async move {
+                let respond = move |status: u16, content_type: &str, body: Vec<u8>| {
+                    let resp = tauri::http::Response::builder()
+                        .status(status)
+                        .header(tauri::http::header::CONTENT_TYPE, content_type)
+                        // Decrypted bytes are immutable per id; let the
+                        // webview cache aggressively for the session.
+                        .header(tauri::http::header::CACHE_CONTROL, "private, max-age=86400, immutable")
+                        // Custom-protocol responses default to a different
+                        // origin than the page; relax CORS so fetch() etc
+                        // also work if we ever need them.
+                        .header(tauri::http::header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
+                        .body(body)
+                        .unwrap();
+                    responder.respond(resp);
+                };
+
+                if media_id.is_empty() {
+                    respond(400, "text/plain", b"missing media id".to_vec());
+                    return;
+                }
+
+                let state = app.state::<AppState>();
+                let result = state
+                    .bridge
+                    .call("fetch_media", Some(json!({ "media_id": &media_id })))
+                    .await;
+                match result {
+                    Ok(v) => {
+                        let mime = v
+                            .get("mime")
+                            .and_then(Value::as_str)
+                            .unwrap_or("application/octet-stream")
+                            .to_string();
+                        let b64 = match v.get("bytes_b64").and_then(Value::as_str) {
+                            Some(s) => s,
+                            None => {
+                                log::warn!("lumina-media: bridge response missing bytes_b64 for {media_id}");
+                                respond(502, "text/plain", b"bridge missing bytes_b64".to_vec());
+                                return;
+                            }
+                        };
+                        match base64::engine::general_purpose::STANDARD.decode(b64) {
+                            Ok(bytes) => {
+                                log::info!(
+                                    "lumina-media ok: media_id={} mime={} bytes={}",
+                                    media_id,
+                                    mime,
+                                    bytes.len()
+                                );
+                                respond(200, &mime, bytes);
+                            }
+                            Err(e) => {
+                                log::warn!("lumina-media decode failed for {media_id}: {e}");
+                                respond(
+                                    502,
+                                    "text/plain",
+                                    format!("decode: {e}").into_bytes(),
+                                );
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        log::warn!("lumina-media bridge error for {media_id}: {e}");
+                        respond(404, "text/plain", e.into_bytes());
+                    }
+                }
+            });
+        })
         .setup(|app| {
             let app_handle = app.handle().clone();
             let data_dir = app
@@ -195,6 +296,7 @@ pub fn run() {
             bridge_connect,
             bridge_unpair,
             bridge_list_conversations,
+            bridge_fetch_messages,
             start_gaia_login,
             pair_with_cookies,
             detect_browsers,

@@ -5,6 +5,7 @@ package main
 import (
 	"bufio"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -47,6 +48,16 @@ type server struct {
 
 	outMu sync.Mutex
 	out   *json.Encoder
+
+	// Decryption keys for media attachments, indexed by media_id.
+	// Populated whenever we summarize a Message (events or fetch_messages),
+	// consumed by handleFetchMedia. Keys never leave Go.
+	mediaKeys sync.Map // map[string]mediaKey
+}
+
+type mediaKey struct {
+	key  []byte
+	mime string
 }
 
 func newServer(log zerolog.Logger, dataDir string) *server {
@@ -147,6 +158,14 @@ func (s *server) handleEvent(rawEvt any) {
 		s.emit("phone_online", nil)
 	case *gmproto.Conversation:
 		s.emit("conversation_updated", convSummary(evt))
+	case *libgm.WrappedMessage:
+		// libgm replays old messages on reconnect (IsOld). They've been
+		// seen already by previous sessions, so don't re-notify the UI;
+		// they'll show up via fetch_messages on demand.
+		if evt.IsOld {
+			return
+		}
+		s.emit("message_upserted", s.messageSummary(evt.Message))
 	default:
 		s.log.Debug().Type("type", evt).Msg("unhandled libgm event")
 	}
@@ -188,6 +207,65 @@ func convSummary(c *gmproto.Conversation) map[string]any {
 		"pinned":         c.GetPinned(),
 		"read_only":      c.GetReadOnly(),
 	}
+}
+
+// messageSummary collapses the libgm Message proto into a stable UI shape.
+// Direction is derived from MessageStatusType: 100+ is incoming, anything
+// below is an outgoing state (sending, sent, delivered, read, failed, etc).
+// Also stashes per-attachment decryption keys in s.mediaKeys for later
+// fetch_media calls.
+func (s *server) messageSummary(m *gmproto.Message) map[string]any {
+	status := m.GetMessageStatus().GetStatus()
+	parts := make([]map[string]any, 0, len(m.GetMessageInfo()))
+	for _, info := range m.GetMessageInfo() {
+		if mc := info.GetMessageContent(); mc != nil {
+			parts = append(parts, map[string]any{
+				"kind": "text",
+				"text": mc.GetContent(),
+			})
+			continue
+		}
+		if med := info.GetMediaContent(); med != nil {
+			// Stash the decryption key so the UI can request bytes by id.
+			if id := med.GetMediaID(); id != "" && len(med.GetDecryptionKey()) > 0 {
+				s.mediaKeys.Store(id, mediaKey{
+					key:  med.GetDecryptionKey(),
+					mime: med.GetMimeType(),
+				})
+			}
+			parts = append(parts, map[string]any{
+				"kind":     "media",
+				"media_id": med.GetMediaID(),
+				"name":     med.GetMediaName(),
+				"mime":     med.GetMimeType(),
+				"size":     med.GetSize(),
+				"width":    med.GetDimensions().GetWidth(),
+				"height":   med.GetDimensions().GetHeight(),
+				// Bytes resolved on demand via fetch_media.
+			})
+		}
+	}
+	sender := m.GetSenderParticipant()
+	senderName := sender.GetFullName()
+	if senderName == "" {
+		senderName = sender.GetFirstName()
+	}
+	out := map[string]any{
+		"id":              m.GetMessageID(),
+		"tmp_id":          m.GetTmpID(),
+		"conversation_id": m.GetConversationID(),
+		"timestamp":       m.GetTimestamp(),
+		"from_me":         status > 0 && status < 100,
+		"sender_id":       m.GetParticipantID(),
+		"sender_name":     senderName,
+		"status":          int32(status),
+		"status_label":    status.String(),
+		"parts":           parts,
+	}
+	if rep := m.GetReplyMessage(); rep != nil {
+		out["reply_to"] = rep.GetMessageID()
+	}
+	return out
 }
 
 // ---------- methods ----------
@@ -307,6 +385,93 @@ func (s *server) handleUnpair() (any, error) {
 	return map[string]bool{"ok": true}, nil
 }
 
+func (s *server) handleFetchMessages(params json.RawMessage) (any, error) {
+	s.mu.Lock()
+	cli := s.cli
+	s.mu.Unlock()
+	if cli == nil {
+		return nil, errors.New("not connected")
+	}
+	args := struct {
+		ConversationID string `json:"conversation_id"`
+		Count          int64  `json:"count"`
+		Cursor         *struct {
+			LastItemID        string `json:"last_item_id"`
+			LastItemTimestamp int64  `json:"last_item_timestamp"`
+		} `json:"cursor"`
+	}{Count: 50}
+	if len(params) > 0 {
+		if err := json.Unmarshal(params, &args); err != nil {
+			return nil, err
+		}
+	}
+	if args.ConversationID == "" {
+		return nil, errors.New("conversation_id required")
+	}
+	var cursor *gmproto.Cursor
+	if args.Cursor != nil {
+		cursor = &gmproto.Cursor{
+			LastItemID:        args.Cursor.LastItemID,
+			LastItemTimestamp: args.Cursor.LastItemTimestamp,
+		}
+	}
+	resp, err := cli.FetchMessages(args.ConversationID, args.Count, cursor)
+	if err != nil {
+		return nil, err
+	}
+	msgs := resp.GetMessages()
+	out := make([]map[string]any, 0, len(msgs))
+	for _, m := range msgs {
+		out = append(out, s.messageSummary(m))
+	}
+	var nextCursor any
+	if c := resp.GetCursor(); c != nil && c.GetLastItemID() != "" {
+		nextCursor = map[string]any{
+			"last_item_id":        c.GetLastItemID(),
+			"last_item_timestamp": c.GetLastItemTimestamp(),
+		}
+	}
+	return map[string]any{
+		"messages": out,
+		"cursor":   nextCursor,
+		"total":    resp.GetTotalMessages(),
+	}, nil
+}
+
+func (s *server) handleFetchMedia(params json.RawMessage) (any, error) {
+	s.mu.Lock()
+	cli := s.cli
+	s.mu.Unlock()
+	if cli == nil {
+		return nil, errors.New("not connected")
+	}
+	args := struct {
+		MediaID string `json:"media_id"`
+	}{}
+	if err := json.Unmarshal(params, &args); err != nil {
+		return nil, err
+	}
+	if args.MediaID == "" {
+		return nil, errors.New("media_id required")
+	}
+	v, ok := s.mediaKeys.Load(args.MediaID)
+	if !ok {
+		// Most likely the UI asked for media before its message had been
+		// summarized in this bridge session. The UI should refetch the
+		// thread to repopulate keys.
+		return nil, errors.New("media key not known; refetch thread")
+	}
+	mk := v.(mediaKey)
+	bytes, err := cli.DownloadMedia(args.MediaID, mk.key)
+	if err != nil {
+		return nil, fmt.Errorf("download media: %w", err)
+	}
+	return map[string]any{
+		"mime":      mk.mime,
+		"bytes_b64": base64.StdEncoding.EncodeToString(bytes),
+	}, nil
+}
+
 func (s *server) handleListConversations(params json.RawMessage) (any, error) {
 	s.mu.Lock()
 	cli := s.cli
@@ -374,6 +539,20 @@ func (s *server) dispatch(req request) {
 		s.reply(req.ID, res)
 	case "list_conversations":
 		res, err := s.handleListConversations(req.Params)
+		if err != nil {
+			s.replyErr(req.ID, err)
+			return
+		}
+		s.reply(req.ID, res)
+	case "fetch_messages":
+		res, err := s.handleFetchMessages(req.Params)
+		if err != nil {
+			s.replyErr(req.ID, err)
+			return
+		}
+		s.reply(req.ID, res)
+	case "fetch_media":
+		res, err := s.handleFetchMedia(req.Params)
 		if err != nil {
 			s.replyErr(req.ID, err)
 			return

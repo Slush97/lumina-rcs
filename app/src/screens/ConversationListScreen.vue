@@ -1,18 +1,20 @@
 <script setup lang="ts">
-import { onMounted, onBeforeUnmount, ref } from "vue";
-import { bridge, on, type Conversation } from "../bridge";
+import { onMounted, ref } from "vue";
+import { bridge } from "../bridge";
+import { conversations, loadInbox } from "../store";
 
-const emit = defineEmits<{ (e: "unpaired"): void }>();
+defineProps<{ selectedId?: string | null }>();
+const emit = defineEmits<{
+  (e: "unpaired"): void;
+  (e: "open", id: string): void;
+}>();
 
-const conversations = ref<Conversation[]>([]);
 const loading = ref(true);
 const errorMsg = ref<string>("");
 
-const unlisten: (() => void)[] = [];
-
 async function refresh() {
   try {
-    conversations.value = await bridge.listConversations(50);
+    await loadInbox(50);
     loading.value = false;
   } catch (e) {
     errorMsg.value = String(e);
@@ -38,17 +40,7 @@ async function unpair() {
   emit("unpaired");
 }
 
-onMounted(async () => {
-  unlisten.push(
-    await on<Conversation>("conversation_updated", () => {
-      // Cheap approach for Phase 1: refetch on any change. Optimize later.
-      refresh();
-    })
-  );
-  await refresh();
-});
-
-onBeforeUnmount(() => unlisten.forEach((fn) => fn()));
+onMounted(refresh);
 </script>
 
 <template>
@@ -75,10 +67,16 @@ onBeforeUnmount(() => unlisten.forEach((fn) => fn()));
       <div v-else-if="conversations.length === 0" class="text-center text-ink-500 dark:text-ink-300 mt-10">
         No conversations yet.
       </div>
-      <div
+      <button
         v-for="conv in conversations"
         :key="conv.id"
-        class="paper-card paper-card-pressable rounded-lg px-4 py-3 flex items-center gap-3"
+        type="button"
+        class="rounded-lg px-3 py-2 flex items-center gap-3 w-full text-left
+               transition-colors"
+        :class="conv.id === selectedId
+          ? 'bg-accent-100/60 dark:bg-accent-900/40'
+          : 'hover:bg-accent-100/30 dark:hover:bg-accent-900/20'"
+        @click="emit('open', conv.id)"
       >
         <div
           class="w-10 h-10 rounded-full flex-shrink-0 flex items-center justify-center text-sm font-medium text-surface-0"
@@ -105,7 +103,7 @@ onBeforeUnmount(() => unlisten.forEach((fn) => fn()));
             {{ conv.snippet || "(no preview)" }}
           </p>
         </div>
-      </div>
+      </button>
     </div>
   </div>
 </template>
