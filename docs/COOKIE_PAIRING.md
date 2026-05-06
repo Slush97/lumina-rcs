@@ -39,53 +39,56 @@ it and report missing cookies.
 
 ## How to extract them
 
-### Google Chrome / Chromium / Brave / Edge / Vivaldi
+### The fast way (any modern browser, ~30 seconds)
+
+Use the Network tab to copy the entire `Cookie` request header in one
+shot. It contains every cookie your browser sends Google, in exactly
+the format Lumina parses.
 
 1. Sign into [`messages.google.com/web`](https://messages.google.com/web)
    with the Google account that owns your Google Messages.
 2. Open DevTools (`F12` or `Ctrl+Shift+I`).
-3. Switch to the **Application** tab.
-4. In the left sidebar: **Storage → Cookies → `https://google.com`**
-   (use `https://google.com`, not `https://messages.google.com` — the
-   cookies you need live on the parent domain).
-5. Find each row from the list above. For each cookie, double-click the
-   `Value` column and copy the full string.
-6. Paste into Lumina in either format:
+3. Switch to the **Network** tab.
+4. **Reload the page** (so requests show up in the list).
+5. Click any request to `messages.google.com` near the top of the list.
+6. On the right, go to the **Headers** tab.
+7. Scroll down to **Request Headers** and find the line that starts
+   with **`cookie:`**.
+8. Right-click the value → **Copy value** (Chrome/Brave/Edge) or
+   **Copy Value** (Firefox).
+9. Paste into Lumina's textarea, click **Pair**.
+
+That single paste contains `SAPISID`, `HSID`, `SSID`, `SID`, `APISID`,
+and every other cookie the browser is sending. Lumina forwards them all
+to libgm.
+
+### Manual — one cookie at a time
+
+If you'd rather pick cookies individually (e.g. to keep less data on
+disk), use the cookies panel directly:
+
+1. Open DevTools → **Application** (Chrome) or **Storage** (Firefox).
+2. **Cookies → `https://google.com`** (use `google.com`, not
+   `messages.google.com` — the cookies live on the parent domain).
+3. For each of `SAPISID`, `HSID`, `SSID`, `SID`, `APISID`: click the
+   row, then in the bottom panel **Cookie Value**, click in the value
+   field, `Ctrl+A`, `Ctrl+C`.
+4. Assemble into either format Lumina accepts:
 
    **JSON**
-
    ```json
-   {
-     "SAPISID": "abc123...",
-     "HSID": "...",
-     "SSID": "...",
-     "SID": "...",
-     "APISID": "..."
-   }
+   { "SAPISID": "...", "HSID": "...", "SSID": "...", "SID": "...", "APISID": "..." }
    ```
 
-   **DevTools "Copy" format** *(easier to assemble manually)*
-
+   **Semicolon-delimited**
    ```
-   SAPISID=abc123...; HSID=...; SSID=...; SID=...; APISID=...
+   SAPISID=...; HSID=...; SSID=...; SID=...; APISID=...
    ```
-
-7. Click **Pair**. Lumina sends the cookies to the bridge, which
-   contacts Google and returns a single emoji. Your phone's Google
-   Messages app shows three emojis — tap the matching one to confirm.
-
-### Firefox
-
-1. Sign into `messages.google.com/web`.
-2. Open DevTools (`F12`), go to the **Storage** tab.
-3. **Cookies → `https://google.com`**.
-4. Same as Chrome from step 5.
 
 ### Safari / mobile / others
 
-Anywhere you can view cookies works. The cookie *names* and *values* are
-all that matter — Lumina doesn't care about the source browser, expiry,
-or other metadata.
+Anywhere you can view a `Cookie` request header or the cookie store
+works. The cookie *names* and *values* are all that matter.
 
 ## Security notes
 
