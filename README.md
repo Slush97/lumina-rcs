@@ -18,19 +18,27 @@ Pair via QR → list conversations. Auth persists across restarts.
 ## Run
 
 ```bash
-# 1. Build the Go bridge
-cd bridge
-go build -o bin/lumina-bridge .
-
-# 2. Run the Tauri app in dev
-cd ../app
-pnpm install   # first time only
-pnpm tauri dev
+# One-shot: build the bridge and start the Tauri app.
+./scripts/dev
 ```
 
-The app spawns the bridge child process automatically. Bridge logs
-appear in the same terminal (stderr); UI ↔ bridge JSON traffic is on
-stdin/stdout.
+The script does `go build` for the bridge then `pnpm tauri dev` for the
+app. The app spawns the bridge child process automatically. Bridge
+logs appear in the same terminal (stderr); UI ↔ bridge JSON traffic is
+on stdin/stdout.
+
+First time only:
+
+```bash
+cd app && pnpm install
+```
+
+Manual equivalent:
+
+```bash
+(cd bridge && go build -o bin/lumina-bridge .)
+(cd app && pnpm tauri dev)
+```
 
 Auth is persisted to your platform's app local data dir, e.g.
 `~/.local/share/com.slush97.lumina/auth.json` on Linux. Override with

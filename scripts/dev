@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+# Build the Go bridge, then run the Tauri app in dev mode.
+# Usage: ./scripts/dev
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+cd "$ROOT"
+
+echo "==> Building bridge"
+(cd bridge && go build -o bin/lumina-bridge .)
+
+echo "==> Starting Tauri (Ctrl+C to stop)"
+cd app
+exec pnpm tauri dev

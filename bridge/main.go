@@ -125,9 +125,14 @@ func (s *server) handleEvent(rawEvt any) {
 	case *events.PairSuccessful:
 		s.mu.Lock()
 		s.paired = true
+		cli := s.cli
 		s.mu.Unlock()
 		s.saveSession()
 		s.emit("paired", map[string]string{"phone_id": evt.PhoneID})
+		// libgm fires PairSuccessful, then internally Reconnects. There's
+		// no ClientReady emitted from libgm core, so synthesize one when
+		// the long-poll is actually up.
+		go s.waitConnectedThenReady(cli)
 	case *events.ClientReady:
 		s.emit("ready", nil)
 	case *events.AuthTokenRefreshed:
@@ -145,6 +150,27 @@ func (s *server) handleEvent(rawEvt any) {
 	default:
 		s.log.Debug().Type("type", evt).Msg("unhandled libgm event")
 	}
+}
+
+// waitConnectedThenReady polls IsConnected for up to 15s after a pair
+// succeeds. libgm Reconnects internally but emits no signal when done,
+// so this gives the UI a reliable handoff to switch to the conversation
+// list screen.
+func (s *server) waitConnectedThenReady(cli *libgm.Client) {
+	if cli == nil {
+		return
+	}
+	for i := 0; i < 30; i++ {
+		time.Sleep(500 * time.Millisecond)
+		if cli.IsConnected() {
+			s.emit("ready", nil)
+			return
+		}
+	}
+	s.emit("error", map[string]string{
+		"kind": "ready_timeout",
+		"msg":  "long-poll did not connect within 15s after pairing",
+	})
 }
 
 func convSummary(c *gmproto.Conversation) map[string]any {
