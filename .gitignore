@@ -1,3 +1,4 @@
+# --- Build artifacts ---
 node_modules/
 dist/
 target/
@@ -5,6 +6,31 @@ target/
 **/src-tauri/gen/
 **/.vite/
 *.log
+
+# --- OS / IDE ---
 .DS_Store
+.vscode/
+.idea/
+*.swp
+*~
+
+# --- Secrets (defense in depth — these should never live in the repo) ---
+# Lumina's persistent auth (libgm AuthData with cookies + tokens).
 auth.json
+# libgm test/demo files (cookies.json + session.json from gmtest pattern).
+cookies.json
+session.json
+# Any pasted-cookie scratch files.
+cookies.txt
+cookies-*.json
+
+# --- Environment / credentials ---
 .env*
+*.pem
+*.key
+*.crt
+*.p12
+*-credentials*
+*-secret*
+*-token*
+service-account*.json
